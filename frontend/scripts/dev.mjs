@@ -1,8 +1,15 @@
+import { copyFile, mkdir } from "node:fs/promises";
 import esbuild from "esbuild";
+
+await mkdir("dist", { recursive: true });
+await copyFile("index.html", "dist/index.html");
 
 const context = await esbuild.context({
   entryPoints: ["src/main.tsx"],
   bundle: true,
+  define: {
+    "process.env.API_URL": JSON.stringify(process.env.API_URL ?? "http://localhost:4000/api")
+  },
   sourcemap: true,
   outdir: "dist/assets",
   entryNames: "app",
@@ -18,7 +25,7 @@ const context = await esbuild.context({
 
 await context.watch();
 const server = await context.serve({
-  servedir: ".",
+  servedir: "dist",
   host: "0.0.0.0",
   port: 8000
 });

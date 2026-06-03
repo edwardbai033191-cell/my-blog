@@ -7,6 +7,9 @@ await mkdir("dist/assets", { recursive: true });
 await esbuild.build({
   entryPoints: ["src/main.tsx"],
   bundle: true,
+  define: {
+    "process.env.API_URL": JSON.stringify(process.env.API_URL ?? "")
+  },
   minify: true,
   sourcemap: true,
   outdir: "dist/assets",
