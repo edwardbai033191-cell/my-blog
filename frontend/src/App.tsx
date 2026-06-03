@@ -95,14 +95,10 @@ function App() {
     content: "## Untitled idea\n\nStart with the shape of the piece.\n\n- Key point\n- Supporting detail\n- Closing note"
   });
   const [view, setView] = useState<View>("read");
+  const [searchQuery, setSearchQuery] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const selectedPost = useMemo(
-    () => posts.find((post) => post.id === selectedId) ?? posts[0],
-    [posts, selectedId]
-  );
 
   const publishedPosts = useMemo(
     () => posts.filter((post) => post.status === "published"),
@@ -110,6 +106,37 @@ function App() {
   );
 
   const draftPosts = useMemo(() => posts.filter((post) => post.status === "draft"), [posts]);
+
+  const normalizedSearch = searchQuery.trim().toLowerCase();
+
+  const matchesSearch = (post: Post) => {
+    if (!normalizedSearch) {
+      return true;
+    }
+
+    return [post.title, post.excerpt, post.content, post.author, post.status]
+      .join(" ")
+      .toLowerCase()
+      .includes(normalizedSearch);
+  };
+
+  const filteredPosts = useMemo(
+    () => posts.filter(matchesSearch),
+    [posts, normalizedSearch]
+  );
+
+  const filteredPublishedPosts = useMemo(
+    () => publishedPosts.filter(matchesSearch),
+    [publishedPosts, normalizedSearch]
+  );
+
+  const readerPost = useMemo(
+    () =>
+      filteredPublishedPosts.find((post) => post.id === selectedId) ??
+      filteredPublishedPosts[0] ??
+      null,
+    [filteredPublishedPosts, selectedId]
+  );
 
   const previewPost: Post = {
     id: "preview",
@@ -215,6 +242,15 @@ function App() {
           <span>Field Notes</span>
           <small>{publishedPosts.length} published</small>
         </button>
+        <label className="search-field" aria-label="Search posts">
+          <span>Search</span>
+          <input
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Search posts"
+            type="search"
+            value={searchQuery}
+          />
+        </label>
         <nav aria-label="Primary">
           <button className={view === "read" ? "nav-button active" : "nav-button"} onClick={() => setView("read")} type="button">
             Reader
@@ -234,14 +270,17 @@ function App() {
         <section className="reader-page" aria-label="Reader">
           <aside className="rail" aria-label="Published posts">
             <div className="section-heading">
-              <h2>Latest</h2>
-              <span>{publishedPosts.length}</span>
+              <h2>{normalizedSearch ? "Results" : "Latest"}</h2>
+              <span>{filteredPublishedPosts.length}</span>
             </div>
             {isLoading ? <p className="muted">Loading posts...</p> : null}
+            {!isLoading && filteredPublishedPosts.length === 0 ? (
+              <p className="muted">No published posts match your search.</p>
+            ) : null}
             <div className="post-buttons">
-              {publishedPosts.map((post) => (
+              {filteredPublishedPosts.map((post) => (
                 <button
-                  className={post.id === selectedPost?.id ? "post-button active" : "post-button"}
+                  className={post.id === readerPost?.id ? "post-button active" : "post-button"}
                   key={post.id}
                   onClick={() => openPost(post.id)}
                   type="button"
@@ -254,21 +293,21 @@ function App() {
           </aside>
 
           <article className="reader">
-            {selectedPost ? (
+            {readerPost ? (
               <>
                 <div className="reader-header">
                   <div>
                     <p className="eyebrow">
-                      {selectedPost.author} / {dateFormatter.format(new Date(selectedPost.updatedAt))}
+                      {readerPost.author} / {dateFormatter.format(new Date(readerPost.updatedAt))}
                     </p>
-                    <h1>{selectedPost.title}</h1>
+                    <h1>{readerPost.title}</h1>
                   </div>
-                  <button className="ghost-button" onClick={() => void deletePost(selectedPost.id)} type="button">
+                  <button className="ghost-button" onClick={() => void deletePost(readerPost.id)} type="button">
                     Delete
                   </button>
                 </div>
-                <p className="excerpt">{selectedPost.excerpt}</p>
-                <div className="prose" dangerouslySetInnerHTML={{ __html: renderMarkdown(selectedPost.content) }} />
+                <p className="excerpt">{readerPost.excerpt}</p>
+                <div className="prose" dangerouslySetInnerHTML={{ __html: renderMarkdown(readerPost.content) }} />
               </>
             ) : (
               <p className="muted">No posts yet.</p>
@@ -282,9 +321,14 @@ function App() {
           <div className="page-title">
             <p className="eyebrow">Archive</p>
             <h1>Manage the collection</h1>
+            <p className="page-summary">
+              {normalizedSearch
+                ? `${filteredPosts.length} matching posts across ${posts.length} total`
+                : `${publishedPosts.length} published and ${draftPosts.length} drafts`}
+            </p>
           </div>
           <div className="library-grid">
-            {[...posts].map((post) => (
+            {[...filteredPosts].map((post) => (
               <article className="post-card" key={post.id}>
                 <div>
                   <span className={post.status === "draft" ? "status draft" : "status"}>{post.status}</span>
@@ -303,6 +347,9 @@ function App() {
             ))}
           </div>
           {!isLoading && posts.length === 0 ? <p className="muted">The archive is empty.</p> : null}
+          {!isLoading && posts.length > 0 && filteredPosts.length === 0 ? (
+            <p className="muted">No posts match your search.</p>
+          ) : null}
         </section>
       ) : null}
 
