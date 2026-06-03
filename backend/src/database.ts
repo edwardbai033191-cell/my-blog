@@ -23,7 +23,6 @@ type DraftPost = {
   status?: "draft" | "published";
 };
 
-const databasePath = process.env.DATABASE_PATH ?? "data/blog.sqlite";
 const require = createRequire(import.meta.url);
 const wasmPath = require.resolve("sql.js/dist/sql-wasm.wasm");
 
@@ -88,7 +87,7 @@ export const createId = (title: string) => {
   return `${slug || "post"}-${Date.now().toString(36)}`;
 };
 
-export const createPostStore = async () => {
+export const createPostStore = async (databasePath = process.env.DATABASE_PATH ?? "data/blog.sqlite") => {
   const SQL = await initSqlJs({ locateFile: () => wasmPath });
   let db: Database;
 
@@ -230,3 +229,5 @@ export const createPostStore = async () => {
     }
   };
 };
+
+export type PostStore = Awaited<ReturnType<typeof createPostStore>>;
