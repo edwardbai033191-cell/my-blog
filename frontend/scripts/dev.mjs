@@ -3,6 +3,9 @@ import esbuild from "esbuild";
 const context = await esbuild.context({
   entryPoints: ["src/main.tsx"],
   bundle: true,
+  define: {
+    "process.env.API_URL": JSON.stringify(process.env.API_URL ?? "http://localhost:4000/api")
+  },
   sourcemap: true,
   outdir: "dist/assets",
   entryNames: "app",

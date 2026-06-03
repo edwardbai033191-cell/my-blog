@@ -29,7 +29,10 @@ const emptyDraft: DraftPost = {
   author: ""
 };
 
-const apiRoot = window.location.port === "8000" ? "http://localhost:4000/api" : "/api";
+const configuredApiRoot = process.env.API_URL;
+const apiRoot =
+  configuredApiRoot ||
+  (window.location.port === "8000" ? "http://localhost:4000/api" : "/api");
 
 const dateFormatter = new Intl.DateTimeFormat(undefined, {
   month: "short",
