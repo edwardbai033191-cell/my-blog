@@ -1,4 +1,8 @@
+import { copyFile, mkdir } from "node:fs/promises";
 import esbuild from "esbuild";
+
+await mkdir("dist", { recursive: true });
+await copyFile("index.html", "dist/index.html");
 
 const context = await esbuild.context({
   entryPoints: ["src/main.tsx"],
@@ -21,7 +25,7 @@ const context = await esbuild.context({
 
 await context.watch();
 const server = await context.serve({
-  servedir: ".",
+  servedir: "dist",
   host: "0.0.0.0",
   port: 8000
 });
