@@ -1,9 +1,5 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
-import { createRequire } from "node:module";
 import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import initSqlJs from "sql.js";
-import type { Database, ParamsObject, SqlValue } from "sql.js";
+import { Pool } from "pg";
 
 export type User = {
   id: string;
@@ -32,9 +28,6 @@ type DraftPost = {
   status?: "draft" | "published";
 };
 
-const require = createRequire(import.meta.url);
-const wasmPath = require.resolve("sql.js/dist/sql-wasm.wasm");
-
 const samplePosts: Post[] = [
   {
     id: "welcome-to-the-journal",
@@ -62,7 +55,7 @@ const samplePosts: Post[] = [
   }
 ];
 
-const rowToPost = (row: ParamsObject): Post => ({
+const rowToPost = (row: Record<string, unknown>): Post => ({
   id: String(row.id),
   title: String(row.title),
   excerpt: String(row.excerpt),
@@ -70,32 +63,17 @@ const rowToPost = (row: ParamsObject): Post => ({
   author: String(row.author),
   userId: row.user_id ? String(row.user_id) : null,
   status: row.status === "draft" ? "draft" : "published",
-  createdAt: String(row.created_at),
-  updatedAt: String(row.updated_at)
+  createdAt: new Date(String(row.created_at)).toISOString(),
+  updatedAt: new Date(String(row.updated_at)).toISOString()
 });
 
-const rowToUser = (row: ParamsObject): User => ({
+const rowToUser = (row: Record<string, unknown>): User => ({
   id: String(row.id),
   name: String(row.name),
   email: String(row.email),
   role: row.role === "admin" ? "admin" : "user",
-  createdAt: String(row.created_at)
+  createdAt: new Date(String(row.created_at)).toISOString()
 });
-
-const collect = (db: Database, sql: string, params?: SqlValue[]): Post[] => {
-  const statement = db.prepare(sql, params ?? []);
-  const rows: Post[] = [];
-
-  try {
-    while (statement.step()) {
-      rows.push(rowToPost(statement.getAsObject()));
-    }
-  } finally {
-    statement.free();
-  }
-
-  return rows;
-};
 
 export const createId = (title: string) => {
   const slug = title
@@ -107,37 +85,19 @@ export const createId = (title: string) => {
   return `${slug || "post"}-${Date.now().toString(36)}`;
 };
 
-export const createPostStore = async (databasePath = process.env.DATABASE_PATH ?? "data/blog.sqlite") => {
-  const SQL = await initSqlJs({ locateFile: () => wasmPath });
-  let db: Database;
-
-  try {
-    const file = await readFile(databasePath);
-    db = new SQL.Database(file);
-  } catch {
-    db = new SQL.Database();
+const createDefaultPool = () => {
+  if (!process.env.DATABASE_URL) {
+    throw new Error("DATABASE_URL is required");
   }
 
-  db.run(`
-    CREATE TABLE IF NOT EXISTS posts (
-      id TEXT PRIMARY KEY,
-      title TEXT NOT NULL,
-      excerpt TEXT NOT NULL,
-      content TEXT NOT NULL,
-      author TEXT NOT NULL,
-      user_id TEXT,
-      status TEXT NOT NULL DEFAULT 'published',
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-  `);
+  return new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: process.env.DATABASE_SSL === "true" ? { rejectUnauthorized: false } : undefined
+  });
+};
 
-  const postColumns = db.exec("PRAGMA table_info(posts);")[0]?.values ?? [];
-  if (!postColumns.some((column) => column[1] === "user_id")) {
-    db.run("ALTER TABLE posts ADD COLUMN user_id TEXT;");
-  }
-
-  db.run(`
+export const createPostStore = async (pool: Pool = createDefaultPool()) => {
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -145,92 +105,76 @@ export const createPostStore = async (databasePath = process.env.DATABASE_PATH ?
       role TEXT NOT NULL DEFAULT 'user',
       password_hash TEXT NOT NULL,
       password_salt TEXT NOT NULL,
-      created_at TEXT NOT NULL
+      created_at TIMESTAMPTZ NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS posts (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      excerpt TEXT NOT NULL,
+      content TEXT NOT NULL,
+      author TEXT NOT NULL,
+      user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      status TEXT NOT NULL DEFAULT 'published',
+      created_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS sessions (
       token TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      created_at TEXT NOT NULL
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL
     );
   `);
 
-  const userColumns = db.exec("PRAGMA table_info(users);")[0]?.values ?? [];
-  if (!userColumns.some((column) => column[1] === "role")) {
-    db.run("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user';");
-  }
-
-  const existing = db.exec("SELECT COUNT(*) AS count FROM posts;");
-  const count = Number(existing[0]?.values[0]?.[0] ?? 0);
-
-  if (count === 0) {
-    const insert = db.prepare(`
-      INSERT INTO posts (id, title, excerpt, content, author, user_id, status, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
-    `);
-
-    try {
-      for (const post of samplePosts) {
-        insert.run([
-          post.id,
-          post.title,
-          post.excerpt,
-          post.content,
-          post.author,
-          post.userId,
-          post.status,
-          post.createdAt,
-          post.updatedAt
-        ]);
-      }
-    } finally {
-      insert.free();
-    }
-  }
-
   for (const post of samplePosts) {
-    db.run(
+    await pool.query(
       `
-        UPDATE posts
-        SET excerpt = ?, content = ?, updated_at = ?
-        WHERE id = ? AND author = 'Admin';
+        INSERT INTO posts (id, title, excerpt, content, author, user_id, status, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ON CONFLICT (id) DO UPDATE SET
+          excerpt = EXCLUDED.excerpt,
+          content = EXCLUDED.content,
+          updated_at = EXCLUDED.updated_at
+        WHERE posts.author = 'Admin';
       `,
-      [post.excerpt, post.content, post.updatedAt, post.id]
+      [
+        post.id,
+        post.title,
+        post.excerpt,
+        post.content,
+        post.author,
+        post.userId,
+        post.status,
+        post.createdAt,
+        post.updatedAt
+      ]
     );
   }
 
-  const persist = async () => {
-    await mkdir(dirname(databasePath), { recursive: true });
-    await writeFile(databasePath, db.export());
-  };
-
-  await persist();
-
   return {
-    listPosts(userId?: string) {
-      return collect(
-        db,
+    async listPosts(userId?: string) {
+      const result = await pool.query(
         `
           SELECT * FROM posts
-          WHERE status = 'published' OR user_id = ?
-          ORDER BY datetime(updated_at) DESC;
+          WHERE status = 'published' OR user_id = $1
+          ORDER BY updated_at DESC;
         `,
         [userId ?? null]
       );
+      return result.rows.map(rowToPost);
     },
 
-    getPost(id: string, userId?: string) {
-      return (
-        collect(
-          db,
-          `
-            SELECT * FROM posts
-            WHERE id = ? AND (status = 'published' OR user_id = ?)
-            LIMIT 1;
-          `,
-          [id, userId ?? null]
-        )[0] ?? null
+    async getPost(id: string, userId?: string) {
+      const result = await pool.query(
+        `
+          SELECT * FROM posts
+          WHERE id = $1 AND (status = 'published' OR user_id = $2)
+          LIMIT 1;
+        `,
+        [id, userId ?? null]
       );
+      return result.rows[0] ? rowToPost(result.rows[0]) : null;
     },
 
     async createPost(input: DraftPost, user: User) {
@@ -247,10 +191,10 @@ export const createPostStore = async (databasePath = process.env.DATABASE_PATH ?
         updatedAt: now
       };
 
-      db.run(
+      await pool.query(
         `
           INSERT INTO posts (id, title, excerpt, content, author, user_id, status, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);
         `,
         [
           post.id,
@@ -265,19 +209,15 @@ export const createPostStore = async (databasePath = process.env.DATABASE_PATH ?
         ]
       );
 
-      await persist();
       return post;
     },
 
     async deletePost(id: string, userId: string) {
-      db.run("DELETE FROM posts WHERE id = ? AND user_id = ?;", [id, userId]);
-      const deleted = db.getRowsModified() > 0;
-
-      if (deleted) {
-        await persist();
-      }
-
-      return deleted;
+      const result = await pool.query("DELETE FROM posts WHERE id = $1 AND user_id = $2;", [
+        id,
+        userId
+      ]);
+      return (result.rowCount ?? 0) > 0;
     },
 
     async registerUser(
@@ -287,7 +227,10 @@ export const createPostStore = async (databasePath = process.env.DATABASE_PATH ?
       role: "user" | "admin" = "user"
     ) {
       const normalizedEmail = email.trim().toLowerCase();
-      if (db.exec("SELECT id FROM users WHERE email = ?;", [normalizedEmail]).length > 0) {
+      const existing = await pool.query("SELECT id FROM users WHERE email = $1;", [
+        normalizedEmail
+      ]);
+      if (existing.rowCount) {
         return null;
       }
 
@@ -301,113 +244,84 @@ export const createPostStore = async (databasePath = process.env.DATABASE_PATH ?
       const salt = randomBytes(16).toString("hex");
       const hash = scryptSync(password, salt, 64).toString("hex");
 
-      db.run(
+      await pool.query(
         `
           INSERT INTO users (id, name, email, role, password_hash, password_salt, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?);
+          VALUES ($1, $2, $3, $4, $5, $6, $7);
         `,
         [user.id, user.name, user.email, user.role, hash, salt, user.createdAt]
       );
-      await persist();
       return user;
     },
 
     async ensureAdmin(name: string, email: string, password: string) {
       const normalizedEmail = email.trim().toLowerCase();
-      const existing = db.exec("SELECT id FROM users WHERE email = ?;", [normalizedEmail]);
-
-      if (existing.length > 0) {
-        db.run("UPDATE users SET role = 'admin' WHERE email = ?;", [normalizedEmail]);
-        await persist();
-        return;
+      const result = await pool.query(
+        "UPDATE users SET role = 'admin' WHERE email = $1 RETURNING id;",
+        [normalizedEmail]
+      );
+      if (!result.rowCount) {
+        await this.registerUser(name, normalizedEmail, password, "admin");
       }
-
-      await this.registerUser(name, normalizedEmail, password, "admin");
     },
 
-    authenticateUser(email: string, password: string) {
-      const statement = db.prepare(
-        "SELECT * FROM users WHERE email = ? LIMIT 1;",
-        [email.trim().toLowerCase()]
-      );
-
-      try {
-        if (!statement.step()) {
-          return null;
-        }
-
-        const row = statement.getAsObject();
-        const actual = Buffer.from(String(row.password_hash), "hex");
-        const expected = scryptSync(password, String(row.password_salt), 64);
-        return timingSafeEqual(actual, expected) ? rowToUser(row) : null;
-      } finally {
-        statement.free();
+    async authenticateUser(email: string, password: string) {
+      const result = await pool.query("SELECT * FROM users WHERE email = $1 LIMIT 1;", [
+        email.trim().toLowerCase()
+      ]);
+      const row = result.rows[0];
+      if (!row) {
+        return null;
       }
+
+      const actual = Buffer.from(String(row.password_hash), "hex");
+      const expected = scryptSync(password, String(row.password_salt), 64);
+      return timingSafeEqual(actual, expected) ? rowToUser(row) : null;
     },
 
     async createSession(userId: string) {
       const token = randomBytes(32).toString("hex");
-      db.run("INSERT INTO sessions (token, user_id, created_at) VALUES (?, ?, ?);", [
+      await pool.query("INSERT INTO sessions (token, user_id, created_at) VALUES ($1, $2, $3);", [
         token,
         userId,
         new Date().toISOString()
       ]);
-      await persist();
       return token;
     },
 
-    getUserForSession(token: string) {
-      const statement = db.prepare(
+    async getUserForSession(token: string) {
+      const result = await pool.query(
         `
           SELECT users.*
           FROM sessions
           JOIN users ON users.id = sessions.user_id
-          WHERE sessions.token = ?
+          WHERE sessions.token = $1
           LIMIT 1;
         `,
         [token]
       );
-
-      try {
-        return statement.step() ? rowToUser(statement.getAsObject()) : null;
-      } finally {
-        statement.free();
-      }
+      return result.rows[0] ? rowToUser(result.rows[0]) : null;
     },
 
     async deleteSession(token: string) {
-      db.run("DELETE FROM sessions WHERE token = ?;", [token]);
-      await persist();
+      await pool.query("DELETE FROM sessions WHERE token = $1;", [token]);
     },
 
-    listUsers() {
-      const statement = db.prepare(
-        "SELECT id, name, email, role, created_at FROM users ORDER BY datetime(created_at) DESC;"
+    async listUsers() {
+      const result = await pool.query(
+        "SELECT id, name, email, role, created_at FROM users ORDER BY created_at DESC;"
       );
-      const users: User[] = [];
-
-      try {
-        while (statement.step()) {
-          users.push(rowToUser(statement.getAsObject()));
-        }
-      } finally {
-        statement.free();
-      }
-
-      return users;
+      return result.rows.map(rowToUser);
     },
 
-    listAllPosts() {
-      return collect(db, "SELECT * FROM posts ORDER BY datetime(updated_at) DESC;");
+    async listAllPosts() {
+      const result = await pool.query("SELECT * FROM posts ORDER BY updated_at DESC;");
+      return result.rows.map(rowToPost);
     },
 
     async deleteAnyPost(id: string) {
-      db.run("DELETE FROM posts WHERE id = ?;", [id]);
-      const deleted = db.getRowsModified() > 0;
-      if (deleted) {
-        await persist();
-      }
-      return deleted;
+      const result = await pool.query("DELETE FROM posts WHERE id = $1;", [id]);
+      return (result.rowCount ?? 0) > 0;
     }
   };
 };

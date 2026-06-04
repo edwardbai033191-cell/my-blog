@@ -15,9 +15,9 @@ export const createApp = async (postStore?: PostStore) => {
   }
   const getToken = (authorization?: string) =>
     authorization?.startsWith("Bearer ") ? authorization.slice(7) : null;
-  const getUser = (authorization?: string) => {
+  const getUser = async (authorization?: string) => {
     const token = getToken(authorization);
-    return token ? posts.getUserForSession(token) : null;
+    return token ? await posts.getUserForSession(token) : null;
   };
 
   app.use(cors());
@@ -27,14 +27,14 @@ export const createApp = async (postStore?: PostStore) => {
     res.json({ status: "ok" });
   });
 
-  app.get("/api/posts", (req, res) => {
-    const user = getUser(req.headers.authorization);
-    res.json(posts.listPosts(user?.id));
+  app.get("/api/posts", async (req, res) => {
+    const user = await getUser(req.headers.authorization);
+    res.json(await posts.listPosts(user?.id));
   });
 
-  app.get("/api/posts/:id", (req, res) => {
-    const user = getUser(req.headers.authorization);
-    const post = posts.getPost(req.params.id, user?.id);
+  app.get("/api/posts/:id", async (req, res) => {
+    const user = await getUser(req.headers.authorization);
+    const post = await posts.getPost(req.params.id, user?.id);
 
     if (!post) {
       res.status(404).json({ message: "Post not found" });
@@ -45,7 +45,7 @@ export const createApp = async (postStore?: PostStore) => {
   });
 
   app.post("/api/posts", async (req, res) => {
-    const user = getUser(req.headers.authorization);
+    const user = await getUser(req.headers.authorization);
     const { title, excerpt, content, status } = req.body as {
       title?: string;
       excerpt?: string;
@@ -68,7 +68,7 @@ export const createApp = async (postStore?: PostStore) => {
   });
 
   app.delete("/api/posts/:id", async (req, res) => {
-    const user = getUser(req.headers.authorization);
+    const user = await getUser(req.headers.authorization);
 
     if (!user) {
       res.status(401).json({ message: "Sign in to delete posts" });
@@ -115,7 +115,7 @@ export const createApp = async (postStore?: PostStore) => {
   app.post("/api/auth/login", async (req, res) => {
     const { email, password } = req.body as { email?: string; password?: string };
     const user =
-      email?.trim() && password ? posts.authenticateUser(email, password) : null;
+      email?.trim() && password ? await posts.authenticateUser(email, password) : null;
 
     if (!user) {
       res.status(401).json({ message: "Invalid email or password" });
@@ -126,8 +126,8 @@ export const createApp = async (postStore?: PostStore) => {
     res.json({ user, token });
   });
 
-  app.get("/api/auth/me", (req, res) => {
-    const user = getUser(req.headers.authorization);
+  app.get("/api/auth/me", async (req, res) => {
+    const user = await getUser(req.headers.authorization);
 
     if (!user) {
       res.status(401).json({ message: "Not signed in" });
@@ -145,19 +145,19 @@ export const createApp = async (postStore?: PostStore) => {
     res.status(204).send();
   });
 
-  app.get("/api/admin/overview", (req, res) => {
-    const user = getUser(req.headers.authorization);
+  app.get("/api/admin/overview", async (req, res) => {
+    const user = await getUser(req.headers.authorization);
 
     if (user?.role !== "admin") {
       res.status(403).json({ message: "Admin access required" });
       return;
     }
 
-    res.json({ users: posts.listUsers(), posts: posts.listAllPosts() });
+    res.json({ users: await posts.listUsers(), posts: await posts.listAllPosts() });
   });
 
   app.delete("/api/admin/posts/:id", async (req, res) => {
-    const user = getUser(req.headers.authorization);
+    const user = await getUser(req.headers.authorization);
 
     if (user?.role !== "admin") {
       res.status(403).json({ message: "Admin access required" });

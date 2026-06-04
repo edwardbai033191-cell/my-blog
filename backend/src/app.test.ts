@@ -1,17 +1,21 @@
-import { mkdtemp } from "node:fs/promises";
 import assert from "node:assert/strict";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { beforeEach, describe, it } from "node:test";
+import { newDb } from "pg-mem";
+import type { Pool as PgPool } from "pg";
 import request from "supertest";
 import { createApp } from "./app.js";
 import { createPostStore } from "./database.js";
 
-const createTestApp = async () => {
-  const directory = await mkdtemp(join(tmpdir(), "my-blog-api-"));
-  const store = await createPostStore(join(directory, "blog.sqlite"));
+const createTestStore = async () => {
+  const database = newDb();
+  const adapter = database.adapters.createPg();
+  const pool = new adapter.Pool() as unknown as PgPool;
 
-  return createApp(store);
+  return createPostStore(pool);
+};
+
+const createTestApp = async () => {
+  return createApp(await createTestStore());
 };
 
 describe("blog API", () => {
@@ -189,8 +193,7 @@ describe("blog API", () => {
   });
 
   it("allows admins to view users and moderate any post", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "my-blog-admin-"));
-    const store = await createPostStore(join(directory, "blog.sqlite"));
+    const store = await createTestStore();
     const admin = await store.registerUser(
       "Administrator",
       "admin@example.com",
