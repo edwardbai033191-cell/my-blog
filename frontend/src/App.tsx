@@ -24,10 +24,11 @@ type User = {
   id: string;
   name: string;
   email: string;
+  role: "user" | "admin";
   createdAt: string;
 };
 
-type View = "read" | "library" | "write" | "account";
+type View = "read" | "library" | "write" | "account" | "admin";
 type AuthMode = "login" | "register";
 
 const emptyDraft: DraftPost = {
@@ -107,6 +108,8 @@ function App() {
   const [token, setToken] = useState(() => localStorage.getItem("blog-token") ?? "");
   const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [authForm, setAuthForm] = useState({ name: "", email: "", password: "" });
+  const [adminUsers, setAdminUsers] = useState<User[]>([]);
+  const [adminPosts, setAdminPosts] = useState<Post[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -323,6 +326,46 @@ function App() {
     setView("read");
   };
 
+  const loadAdmin = async () => {
+    setError(null);
+
+    try {
+      const response = await fetch(`${apiRoot}/admin/overview`, {
+        headers: authHeaders()
+      });
+      const body = (await response.json()) as {
+        users?: User[];
+        posts?: Post[];
+        message?: string;
+      };
+
+      if (!response.ok || !body.users || !body.posts) {
+        throw new Error(body.message ?? "Unable to load admin dashboard");
+      }
+
+      setAdminUsers(body.users);
+      setAdminPosts(body.posts);
+      setView("admin");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong");
+    }
+  };
+
+  const adminDeletePost = async (postId: string) => {
+    const response = await fetch(`${apiRoot}/admin/posts/${postId}`, {
+      method: "DELETE",
+      headers: authHeaders()
+    });
+
+    if (!response.ok) {
+      setError("Unable to moderate post");
+      return;
+    }
+
+    setAdminPosts((current) => current.filter((post) => post.id !== postId));
+    setPosts((current) => current.filter((post) => post.id !== postId));
+  };
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -352,6 +395,11 @@ function App() {
           <button className={view === "account" ? "nav-button active" : "nav-button"} onClick={() => setView("account")} type="button">
             {user ? user.name : "Sign in"}
           </button>
+          {user?.role === "admin" ? (
+            <button className={view === "admin" ? "nav-button active" : "nav-button"} onClick={() => void loadAdmin()} type="button">
+              Admin
+            </button>
+          ) : null}
         </nav>
       </header>
 
@@ -504,7 +552,7 @@ function App() {
             <div className="account-callout">
               <p className="eyebrow">Account</p>
               <h1>{user.name}</h1>
-              <p className="page-summary">{user.email}</p>
+              <p className="page-summary">{user.email} / {user.role}</p>
               <button className="secondary-button" onClick={() => void logout()} type="button">
                 Sign out
               </button>
@@ -556,6 +604,58 @@ function App() {
               </button>
             </form>
           )}
+        </section>
+      ) : null}
+
+      {view === "admin" && user?.role === "admin" ? (
+        <section className="admin-page" aria-label="Admin dashboard">
+          <div className="page-title">
+            <p className="eyebrow">Administration</p>
+            <h1>Site overview</h1>
+            <p className="page-summary">
+              {adminUsers.length} users and {adminPosts.length} posts
+            </p>
+          </div>
+
+          <section className="admin-section">
+            <div className="section-heading">
+              <h2>Users</h2>
+              <span>{adminUsers.length}</span>
+            </div>
+            <div className="admin-list">
+              {adminUsers.map((account) => (
+                <div className="admin-row" key={account.id}>
+                  <div>
+                    <strong>{account.name}</strong>
+                    <span>{account.email}</span>
+                  </div>
+                  <span className={account.role === "admin" ? "status draft" : "status"}>
+                    {account.role}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="admin-section">
+            <div className="section-heading">
+              <h2>Posts</h2>
+              <span>{adminPosts.length}</span>
+            </div>
+            <div className="admin-list">
+              {adminPosts.map((post) => (
+                <div className="admin-row" key={post.id}>
+                  <div>
+                    <strong>{post.title}</strong>
+                    <span>{post.author} / {post.status}</span>
+                  </div>
+                  <button className="ghost-button" onClick={() => void adminDeletePost(post.id)} type="button">
+                    Delete
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
         </section>
       ) : null}
     </main>

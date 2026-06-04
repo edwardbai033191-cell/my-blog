@@ -187,4 +187,57 @@ describe("blog API", () => {
       .set("Authorization", `Bearer ${visitor.token}`)
       .expect(404);
   });
+
+  it("allows admins to view users and moderate any post", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "my-blog-admin-"));
+    const store = await createPostStore(join(directory, "blog.sqlite"));
+    const admin = await store.registerUser(
+      "Administrator",
+      "admin@example.com",
+      "strong-password",
+      "admin"
+    );
+    assert.ok(admin);
+    const adminToken = await store.createSession(admin.id);
+    const adminApp = await createApp(store);
+
+    const owner = await request(adminApp)
+      .post("/api/auth/register")
+      .send({ name: "Writer", email: "writer@example.com", password: "strong-password" })
+      .expect(201);
+    const post = await request(adminApp)
+      .post("/api/posts")
+      .set("Authorization", `Bearer ${owner.body.token}`)
+      .send({ title: "Moderate Me", excerpt: "Review", content: "Content" })
+      .expect(201);
+
+    const overview = await request(adminApp)
+      .get("/api/admin/overview")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .expect(200);
+    assert.equal(overview.body.users.length, 2);
+    assert.equal(
+      overview.body.users.find((user: { email: string }) => user.email === "admin@example.com").role,
+      "admin"
+    );
+    assert.equal(
+      overview.body.users.find((user: { email: string }) => user.email === "writer@example.com").role,
+      "user"
+    );
+    assert.equal(overview.body.posts.length, 3);
+
+    await request(adminApp)
+      .delete(`/api/admin/posts/${post.body.id}`)
+      .set("Authorization", `Bearer ${adminToken}`)
+      .expect(204);
+  });
+
+  it("blocks normal users from admin routes", async () => {
+    const account = await register();
+
+    await request(app)
+      .get("/api/admin/overview")
+      .set("Authorization", `Bearer ${account.token}`)
+      .expect(403);
+  });
 });

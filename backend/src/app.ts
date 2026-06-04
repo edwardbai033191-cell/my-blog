@@ -6,6 +6,13 @@ import { createPostStore } from "./database.js";
 export const createApp = async (postStore?: PostStore) => {
   const app = express();
   const posts = postStore ?? (await createPostStore());
+  const adminName = process.env.ADMIN_NAME;
+  const adminEmail = process.env.ADMIN_EMAIL;
+  const adminPassword = process.env.ADMIN_PASSWORD;
+
+  if (adminName && adminEmail && adminPassword) {
+    await posts.ensureAdmin(adminName, adminEmail, adminPassword);
+  }
   const getToken = (authorization?: string) =>
     authorization?.startsWith("Bearer ") ? authorization.slice(7) : null;
   const getUser = (authorization?: string) => {
@@ -135,6 +142,34 @@ export const createApp = async (postStore?: PostStore) => {
     if (token) {
       await posts.deleteSession(token);
     }
+    res.status(204).send();
+  });
+
+  app.get("/api/admin/overview", (req, res) => {
+    const user = getUser(req.headers.authorization);
+
+    if (user?.role !== "admin") {
+      res.status(403).json({ message: "Admin access required" });
+      return;
+    }
+
+    res.json({ users: posts.listUsers(), posts: posts.listAllPosts() });
+  });
+
+  app.delete("/api/admin/posts/:id", async (req, res) => {
+    const user = getUser(req.headers.authorization);
+
+    if (user?.role !== "admin") {
+      res.status(403).json({ message: "Admin access required" });
+      return;
+    }
+
+    const deleted = await posts.deleteAnyPost(req.params.id);
+    if (!deleted) {
+      res.status(404).json({ message: "Post not found" });
+      return;
+    }
+
     res.status(204).send();
   });
 

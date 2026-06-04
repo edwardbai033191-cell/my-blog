@@ -21,6 +21,18 @@ The frontend runs at `http://localhost:5173`.
 The backend runs at `http://localhost:4000`.
 The frontend runs at `http://localhost:8000`.
 
+## Admin Account
+
+Set these backend environment variables to create or promote an admin account:
+
+```bash
+ADMIN_NAME=Administrator
+ADMIN_EMAIL=admin@example.com
+ADMIN_PASSWORD=choose-a-strong-password
+```
+
+Use separate credentials for staging and production.
+
 ## Scripts
 
 - `npm run dev` - run frontend and backend together

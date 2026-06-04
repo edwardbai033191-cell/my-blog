@@ -9,6 +9,7 @@ export type User = {
   id: string;
   name: string;
   email: string;
+  role: "user" | "admin";
   createdAt: string;
 };
 
@@ -77,6 +78,7 @@ const rowToUser = (row: ParamsObject): User => ({
   id: String(row.id),
   name: String(row.name),
   email: String(row.email),
+  role: row.role === "admin" ? "admin" : "user",
   createdAt: String(row.created_at)
 });
 
@@ -140,6 +142,7 @@ export const createPostStore = async (databasePath = process.env.DATABASE_PATH ?
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       email TEXT NOT NULL UNIQUE,
+      role TEXT NOT NULL DEFAULT 'user',
       password_hash TEXT NOT NULL,
       password_salt TEXT NOT NULL,
       created_at TEXT NOT NULL
@@ -151,6 +154,11 @@ export const createPostStore = async (databasePath = process.env.DATABASE_PATH ?
       created_at TEXT NOT NULL
     );
   `);
+
+  const userColumns = db.exec("PRAGMA table_info(users);")[0]?.values ?? [];
+  if (!userColumns.some((column) => column[1] === "role")) {
+    db.run("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user';");
+  }
 
   const existing = db.exec("SELECT COUNT(*) AS count FROM posts;");
   const count = Number(existing[0]?.values[0]?.[0] ?? 0);
@@ -272,7 +280,12 @@ export const createPostStore = async (databasePath = process.env.DATABASE_PATH ?
       return deleted;
     },
 
-    async registerUser(name: string, email: string, password: string) {
+    async registerUser(
+      name: string,
+      email: string,
+      password: string,
+      role: "user" | "admin" = "user"
+    ) {
       const normalizedEmail = email.trim().toLowerCase();
       if (db.exec("SELECT id FROM users WHERE email = ?;", [normalizedEmail]).length > 0) {
         return null;
@@ -282,6 +295,7 @@ export const createPostStore = async (databasePath = process.env.DATABASE_PATH ?
         id: `user-${randomBytes(12).toString("hex")}`,
         name: name.trim(),
         email: normalizedEmail,
+        role,
         createdAt: new Date().toISOString()
       };
       const salt = randomBytes(16).toString("hex");
@@ -289,13 +303,26 @@ export const createPostStore = async (databasePath = process.env.DATABASE_PATH ?
 
       db.run(
         `
-          INSERT INTO users (id, name, email, password_hash, password_salt, created_at)
-          VALUES (?, ?, ?, ?, ?, ?);
+          INSERT INTO users (id, name, email, role, password_hash, password_salt, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?);
         `,
-        [user.id, user.name, user.email, hash, salt, user.createdAt]
+        [user.id, user.name, user.email, user.role, hash, salt, user.createdAt]
       );
       await persist();
       return user;
+    },
+
+    async ensureAdmin(name: string, email: string, password: string) {
+      const normalizedEmail = email.trim().toLowerCase();
+      const existing = db.exec("SELECT id FROM users WHERE email = ?;", [normalizedEmail]);
+
+      if (existing.length > 0) {
+        db.run("UPDATE users SET role = 'admin' WHERE email = ?;", [normalizedEmail]);
+        await persist();
+        return;
+      }
+
+      await this.registerUser(name, normalizedEmail, password, "admin");
     },
 
     authenticateUser(email: string, password: string) {
@@ -351,6 +378,36 @@ export const createPostStore = async (databasePath = process.env.DATABASE_PATH ?
     async deleteSession(token: string) {
       db.run("DELETE FROM sessions WHERE token = ?;", [token]);
       await persist();
+    },
+
+    listUsers() {
+      const statement = db.prepare(
+        "SELECT id, name, email, role, created_at FROM users ORDER BY datetime(created_at) DESC;"
+      );
+      const users: User[] = [];
+
+      try {
+        while (statement.step()) {
+          users.push(rowToUser(statement.getAsObject()));
+        }
+      } finally {
+        statement.free();
+      }
+
+      return users;
+    },
+
+    listAllPosts() {
+      return collect(db, "SELECT * FROM posts ORDER BY datetime(updated_at) DESC;");
+    },
+
+    async deleteAnyPost(id: string) {
+      db.run("DELETE FROM posts WHERE id = ?;", [id]);
+      const deleted = db.getRowsModified() > 0;
+      if (deleted) {
+        await persist();
+      }
+      return deleted;
     }
   };
 };
