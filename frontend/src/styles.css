@@ -66,6 +66,25 @@ button {
   font-size: 0.76rem;
 }
 
+.search-field {
+  flex: 1 1 280px;
+  max-width: 420px;
+}
+
+.search-field span {
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  position: absolute;
+  width: 1px;
+}
+
+.search-field input {
+  background: #ffffff;
+  min-height: 40px;
+  width: 100%;
+}
+
 nav {
   background: #ebe5dc;
   border: 1px solid #d7cec0;
@@ -286,6 +305,12 @@ nav {
   margin-bottom: 24px;
 }
 
+.page-summary {
+  color: #687483;
+  line-height: 1.55;
+  margin: 14px 0 0;
+}
+
 .page-title.compact {
   margin-bottom: 8px;
 }
@@ -444,6 +469,11 @@ textarea:focus {
   }
 
   nav {
+    width: 100%;
+  }
+
+  .search-field {
+    max-width: none;
     width: 100%;
   }
 
